@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ГИА — Сестринское дело | Тест 500 вопросов 🥼</title>
+<title>🥼 ГИА — Сестринское дело | Тест 500 вопросов 🥼</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap');
 
@@ -492,7 +492,7 @@
 <div class="screen active" id="startScreen">
   <div class="start-card">
     <div class="badge">ГИА · Сестринское дело</div>
-    <h1>Тест на&nbsp;500 вопросов 🥼</h1>
+    <h1>🥼 Тест на&nbsp;500 вопросов 🥼</h1>
     <p>Подготовка к государственной итоговой аттестации.<br>Выбери режим и количество вопросов.</p>
 
     <div class="mode-grid">
@@ -598,6 +598,8 @@ let mistakes = JSON.parse(localStorage.getItem('gia_mistakes') || '[]');
 let sessionMistakeIndices = [];
 let answered = false;
 let history = JSON.parse(localStorage.getItem('gia_history') || '[]');
+let seenQuestions = JSON.parse(localStorage.getItem('gia_seen') || '[]'); // track shown question indices
+let examPendingIdx = null; // selected but not confirmed in exam mode
 
 // Range helpers
 function updateRange() {
@@ -721,7 +723,22 @@ function startQuiz() {
     // Build pool from selected range (1-indexed → 0-indexed)
     const rangeIndices = [];
     for (let i = fromVal - 1; i < toVal; i++) rangeIndices.push(i);
-    const pool = shuffle(rangeIndices).slice(0, Math.min(count, rangeIndices.length));
+
+    // Prefer unseen questions first, then cycle back if exhausted
+    let unseen = rangeIndices.filter(i => !seenQuestions.includes(i));
+    if (unseen.length < count) {
+      // Reset seen for this range if not enough unseen left
+      seenQuestions = seenQuestions.filter(i => i < fromVal - 1 || i >= toVal);
+      localStorage.setItem('gia_seen', JSON.stringify(seenQuestions));
+      unseen = rangeIndices.slice();
+    }
+
+    const pool = shuffle(unseen).slice(0, Math.min(count, unseen.length));
+
+    // Mark these as seen
+    pool.forEach(i => { if (!seenQuestions.includes(i)) seenQuestions.push(i); });
+    localStorage.setItem('gia_seen', JSON.stringify(seenQuestions));
+
     sessionQuestions = pool.map(i => {
       const q = {...ALL_QUESTIONS[i], origIdx: i};
       const correct = q.opts[0];
@@ -761,6 +778,7 @@ function renderQuestion() {
   document.getElementById('explanation').className = 'explanation';
   document.getElementById('btnNext').className = 'btn-next';
   answered = false;
+  examPendingIdx = null;
 
   const letters = ['А', 'Б', 'В', 'Г'];
   const container = document.getElementById('optionsContainer');
@@ -773,21 +791,66 @@ function renderQuestion() {
     btn.onclick = () => selectAnswer(i);
     container.appendChild(btn);
   });
+
+  // In exam mode show confirm button (hidden until option selected)
+  if (mode === 'exam') {
+    document.getElementById('btnConfirm').style.display = 'none';
+    document.getElementById('btnConfirm').textContent = 'Подтвердить ответ';
+  }
 }
 
 function selectAnswer(chosenIdx) {
   if (answered) return;
-  answered = true;
 
+  const options = document.querySelectorAll('.option');
+
+  if (mode === 'exam') {
+    // Just highlight, don't lock — allow changing
+    options.forEach(o => o.classList.remove('selected-exam'));
+    options[chosenIdx].classList.add('selected-exam');
+    examPendingIdx = chosenIdx;
+    document.getElementById('btnConfirm').style.display = 'block';
+    return;
+  }
+
+  // Other modes: lock immediately
+  answered = true;
+  commitAnswer(chosenIdx);
+}
+
+function confirmExamAnswer() {
+  if (answered || examPendingIdx === null) return;
+  answered = true;
+  const options = document.querySelectorAll('.option');
+  options.forEach(o => o.classList.add('locked'));
+  document.getElementById('btnConfirm').style.display = 'none';
+  const btnNext = document.getElementById('btnNext');
+  btnNext.className = 'btn-next show';
+  btnNext.textContent = currentIdx < sessionQuestions.length - 1 ? 'Следующий вопрос →' : 'Завершить тест →';
+
+  const q = sessionQuestions[currentIdx];
+  q.chosen = examPendingIdx;
+  const isCorrect = examPendingIdx === q.correctIdx;
+  if (isCorrect) {
+    correctCount++;
+  } else {
+    const origIdx = q.origIdx !== undefined ? q.origIdx : currentIdx;
+    if (!mistakes.includes(origIdx)) {
+      mistakes.push(origIdx);
+      localStorage.setItem('gia_mistakes', JSON.stringify(mistakes));
+    }
+    sessionMistakeIndices.push(currentIdx);
+  }
+}
+
+function commitAnswer(chosenIdx) {
   const q = sessionQuestions[currentIdx];
   const correct = q.correctIdx;
   const options = document.querySelectorAll('.option');
   const feedback = document.getElementById('feedback');
   const btnNext = document.getElementById('btnNext');
 
-  // Store chosen answer for exam mode review
   q.chosen = chosenIdx;
-
   const isCorrect = chosenIdx === correct;
   if (isCorrect) {
     correctCount++;
@@ -800,28 +863,19 @@ function selectAnswer(chosenIdx) {
     sessionMistakeIndices.push(currentIdx);
   }
 
-  if (mode === 'exam') {
-    // In exam mode: just highlight selected, no correct/wrong reveal, no feedback
-    options[chosenIdx].classList.add('selected-exam');
-    options.forEach(o => o.classList.add('locked'));
-    btnNext.className = 'btn-next show';
-    btnNext.textContent = currentIdx < sessionQuestions.length - 1 ? 'Следующий вопрос →' : 'Завершить тест →';
+  options.forEach(o => o.classList.add('locked'));
+  options[correct].classList.add('correct');
+  if (isCorrect) {
+    feedback.textContent = '✓ Верно!';
+    feedback.className = 'feedback show ok';
   } else {
-    // Practice / shuffle / mistakes: show feedback immediately
-    options.forEach(o => o.classList.add('locked'));
-    options[correct].classList.add('correct');
-    if (isCorrect) {
-      feedback.textContent = '✓ Верно!';
-      feedback.className = 'feedback show ok';
-    } else {
-      options[chosenIdx].classList.add('wrong');
-      feedback.innerHTML = `✗ Неверно. Правильный ответ: <b>${q.opts[correct]}</b>`;
-      feedback.className = 'feedback show err';
-    }
-    document.getElementById('scoreDisplay').textContent = `✓ ${correctCount}`;
-    btnNext.className = 'btn-next show';
-    btnNext.textContent = currentIdx < sessionQuestions.length - 1 ? 'Следующий вопрос →' : 'Завершить тест →';
+    options[chosenIdx].classList.add('wrong');
+    feedback.innerHTML = `✗ Неверно. Правильный ответ: <b>${q.opts[correct]}</b>`;
+    feedback.className = 'feedback show err';
   }
+  document.getElementById('scoreDisplay').textContent = `✓ ${correctCount}`;
+  btnNext.className = 'btn-next show';
+  btnNext.textContent = currentIdx < sessionQuestions.length - 1 ? 'Следующий вопрос →' : 'Завершить тест →';
 }
 
 function nextQuestion() {
